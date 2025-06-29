@@ -1,0 +1,73 @@
+# Development dependencies for Air Leakage Test Application
+# Install with: pip install -r requirements-dev.txt
+
+# Testing Framework
+pytest>=6.0.0,<7.0.0
+pytest-cov>=2.12.0,<3.0.0
+pytest-mock>=3.6.0,<4.0.0
+pytest-asyncio>=0.15.0,<1.0.0
+pytest-html>=3.1.0,<4.0.0
+pytest-xdist>=2.4.0,<3.0.0
+
+# Code Quality and Formatting
+black>=21.0.0,<23.0.0
+flake8>=3.8.0,<5.0.0
+isort>=5.9.0,<6.0.0
+autopep8>=1.5.0,<2.0.0
+
+# Type Checking
+mypy>=0.910,<1.0.0
+types-requests>=2.25.0,<3.0.0
+types-PyYAML>=5.4.0,<7.0.0
+
+# Pre-commit Hooks
+pre-commit>=2.15.0,<3.0.0
+commitizen>=2.17.0,<3.0.0
+
+# Documentation
+Sphinx>=4.0.0,<5.0.0
+sphinx-rtd-theme>=1.0.0,<2.0.0
+sphinx-autodoc-typehints>=1.12.0,<2.0.0
+myst-parser>=0.15.0,<1.0.0
+
+# Code Coverage
+coverage>=5.5.0,<6.0.0
+coveralls>=3.0.0,<4.0.0
+
+# Security Scanning
+bandit>=1.7.0,<2.0.0
+safety>=1.10.0,<2.0.0
+
+# Performance Profiling
+memory-profiler>=0.60.0,<1.0.0
+line-profiler>=3.3.0,<4.0.0
+
+# Debugging Tools
+ipdb>=0.13.0,<1.0.0
+ipython>=7.0.0,<8.0.0
+
+# Hardware Simulation for Development
+faker>=8.0.0,<9.0.0
+mock>=4.0.0,<5.0.0
+
+# Development Utilities
+click>=8.0.0,<9.0.0
+rich>=10.0.0,<11.0.0
+tqdm>=4.62.0,<5.0.0
+
+# API Documentation
+pydoc-markdown>=4.0.0,<5.0.0
+
+# Dependency Management
+pip-tools>=6.0.0,<7.0.0
+
+# Code Metrics
+radon>=5.1.0,<6.0.0
+mccabe>=0.6.0,<1.0.0
+
+# Jupyter for Development
+jupyter>=1.0.0,<2.0.0
+notebook>=6.4.0,<7.0.0
+
+# Development Environment
+python-dotenv>=0.19.0,<1.0.0 

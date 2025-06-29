@@ -1,0 +1,154 @@
+{
+    "references": {
+        "1234": {
+            "name": "1234",
+            "description": "Reference 1234",
+            "parameters": {
+                "position": 200.0,
+                "target_pressure": 3.0,
+                "inspection_time": 40.0
+            },
+            "created_at": 1751146825.1278489,
+            "updated_at": 1751146825.1278503
+        },
+        "test3": {
+            "name": "test3",
+            "description": "Reference test3",
+            "parameters": {
+                "position": 75.0,
+                "target_pressure": 3.0,
+                "inspection_time": 60.0
+            },
+            "created_at": 1751148689.9561496,
+            "updated_at": 1751148689.9561505
+        }
+    },
+    "last_reference": "test3",
+    "password_hash": "3b612c75a7b5048a435fb6ec81e52ff92d6d795a8b5a9c17070f6a63c97a53b2",
+    "hardware_config": {
+        "gpio_pins": {
+            "emergency_btn": {
+                "pin": 17,
+                "inverted": true,
+                "description": "Emergency Button"
+            },
+            "door_close": {
+                "pin": 4,
+                "inverted": false,
+                "description": "Door Closure Switch"
+            },
+            "tank_min": {
+                "pin": 23,
+                "inverted": false,
+                "description": "Tank Min Level"
+            },
+            "start_button": {
+                "pin": 6,
+                "inverted": false,
+                "description": "Start Button"
+            },
+            "actuator_min": {
+                "pin": 27,
+                "inverted": false,
+                "description": "Actuator Min"
+            },
+            "actuator_max": {
+                "pin": 22,
+                "inverted": false,
+                "description": "Actuator Max"
+            },
+            "stepper_pulse": {
+                "pin": 16,
+                "inverted": false,
+                "description": "Stepper Pulse"
+            },
+            "stepper_dir": {
+                "pin": 21,
+                "inverted": false,
+                "description": "Stepper Direction"
+            },
+            "relay_control_h300": {
+                "pin": 24,
+                "inverted": false,
+                "description": "Relay Control"
+            },
+            "stepper_enable": {
+                "pin": 20,
+                "inverted": false,
+                "description": "Stepper Enable"
+            }
+        },
+        "adc_config": {
+            "address": 72,
+            "busnum": 1,
+            "channel": 0,
+            "gain": 1,
+            "voltage_multiplier": 1.286,
+            "voltage_offset": -0.579
+        },
+        "motor_config": {
+            "steps_per_mm": 380.95,
+            "max_frequency": 50.0,
+            "default_frequency": 25.0,
+            "home_timeout": 120,
+            "move_timeout": 60
+        }
+    },
+    "ui_config": {
+        "colors": {
+            "primary": "#00B2E3",
+            "background": "#f8fafc",
+            "white": "#ffffff",
+            "text_primary": "#1e293b",
+            "text_secondary": "#64748b",
+            "error": "#ef4444",
+            "border": "#e2e8f0",
+            "status_bg": "#e0f2f7",
+            "button_hover": "#0891b2",
+            "success": "#10b981",
+            "warning": "#f59e0b"
+        },
+        "fonts": {
+            "default": [
+                "Arial",
+                12
+            ],
+            "header": [
+                "Arial",
+                18,
+                "bold"
+            ],
+            "button": [
+                "Arial",
+                12,
+                "bold"
+            ],
+            "gauge": [
+                "Arial",
+                18,
+                "bold"
+            ],
+            "small": [
+                "Arial",
+                10
+            ]
+        }
+    },
+    "validation_ranges": {
+        "position": {
+            "min": 65,
+            "max": 200,
+            "unit": "mm"
+        },
+        "pressure": {
+            "min": 0,
+            "max": 4.5,
+            "unit": "bar"
+        },
+        "time": {
+            "min": 0,
+            "max": 120,
+            "unit": "min"
+        }
+    }
+}
