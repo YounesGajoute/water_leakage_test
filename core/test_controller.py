@@ -1,5 +1,5 @@
 """
-Enhanced Test Controller - Comprehensive test sequence management
+Enhanced Test Controller - Comprehensive test sequence management with automatic frequency setting
 """
 import time
 import threading
@@ -10,11 +10,12 @@ from enum import Enum
 
 
 class TestState(Enum):
-    """Test state enumeration"""
+    """Test state enumeration with automatic frequency setting support"""
     IDLE = "idle"
     INITIALIZING = "initializing"
     HOMING = "homing"
     MOVING_TO_POSITION = "moving_to_position"
+    SETTING_FREQUENCY = "setting_frequency"  # NEW: Automatic frequency setting phase
     STARTING_MOTOR = "starting_motor"
     TESTING = "testing"
     STOPPING = "stopping"
@@ -26,21 +27,24 @@ class TestState(Enum):
 
 class TestController:
     def __init__(self, hardware_manager, motor_controller, safety_manager, 
+                 app_controller=None,  # NEW: Added app_controller for settings access
                  status_callback: Optional[Callable] = None,
                  data_callback: Optional[Callable] = None):
         """
-        Initialize enhanced test controller
+        Initialize enhanced test controller with automatic frequency support
         
         Args:
             hardware_manager: Hardware interface
             motor_controller: Motor control interface
             safety_manager: Safety system interface
+            app_controller: Main application controller for settings access
             status_callback: Function to call for status updates
             data_callback: Function to call for data updates
         """
         self.hardware = hardware_manager
         self.motor = motor_controller
         self.safety = safety_manager
+        self.app_controller = app_controller  # NEW: Store app controller reference
         self.status_callback = status_callback
         self.data_callback = data_callback
         
@@ -55,6 +59,10 @@ class TestController:
         self.test_start_time = None
         self.test_duration = 0.0
         self.target_duration = 0.0
+        
+        # NEW: Frequency control parameters
+        self.calculated_frequency = None
+        self.frequency_set_successfully = False
         
         # Data collection
         self.pressure_data = []
@@ -81,10 +89,123 @@ class TestController:
     def can_start_test(self) -> bool:
         """Check if test can be started"""
         return self.test_state == TestState.IDLE
-    
+
+    # NEW: Automatic frequency setting methods
+    def is_automatic_frequency_enabled(self) -> bool:
+        """Check if automatic frequency control is enabled in settings"""
+        try:
+            if not self.app_controller or not hasattr(self.app_controller, 'settings'):
+                return False
+            
+            m100_settings = self.app_controller.settings.get('m100', {})
+            return m100_settings.get('auto_frequency', False)
+        except Exception as e:
+            print(f"Error checking automatic frequency setting: {e}")
+            return False
+
+    def calculate_frequency_from_calibration(self, pressure: float) -> float:
+        """
+        Calculate frequency from pressure using calibration mapping with linear interpolation
+        
+        Args:
+            pressure: Target pressure in bar
+            
+        Returns:
+            float: Calculated frequency in Hz (clamped to 20.0-50.0 Hz range)
+        """
+        try:
+            if not self.app_controller or not hasattr(self.app_controller, 'settings'):
+                return 25.0  # Default fallback
+            
+            # Get calibration mapping from settings
+            hardware_config = self.app_controller.settings.get('hardware_config', {})
+            mapping_config = hardware_config.get('frequency_mapping', {})
+            mapping_points = mapping_config.get('mapping_points', [])
+            
+            if not mapping_points:
+                # Default mapping if none exists
+                mapping_points = [
+                    {'pressure': 1.0, 'frequency': 25.0},
+                    {'pressure': 1.5, 'frequency': 30.0},
+                    {'pressure': 2.0, 'frequency': 35.0},
+                    {'pressure': 2.5, 'frequency': 40.0},
+                    {'pressure': 3.0, 'frequency': 45.0},
+                    {'pressure': 3.5, 'frequency': 47.0},
+                    {'pressure': 4.0, 'frequency': 49.0},
+                    {'pressure': 4.5, 'frequency': 50.0}
+                ]
+            
+            # Sort mapping points by pressure
+            sorted_points = sorted(mapping_points, key=lambda x: x['pressure'])
+            
+            # Handle edge cases
+            if pressure <= sorted_points[0]['pressure']:
+                return sorted_points[0]['frequency']
+            if pressure >= sorted_points[-1]['pressure']:
+                return sorted_points[-1]['frequency']
+            
+            # Linear interpolation between points
+            for i in range(len(sorted_points) - 1):
+                p1 = sorted_points[i]
+                p2 = sorted_points[i + 1]
+                
+                if p1['pressure'] <= pressure <= p2['pressure']:
+                    # Linear interpolation
+                    ratio = (pressure - p1['pressure']) / (p2['pressure'] - p1['pressure'])
+                    frequency = p1['frequency'] + ratio * (p2['frequency'] - p1['frequency'])
+                    return max(20.0, min(50.0, frequency))  # Clamp to safe range
+            
+            return 25.0  # Default fallback
+            
+        except Exception as e:
+            print(f"Error calculating frequency from calibration: {e}")
+            return 25.0  # Default fallback
+
+    def set_m100_frequency(self, frequency: float) -> bool:
+        """
+        Set M100 device frequency via hardware manager
+        
+        Args:
+            frequency: Target frequency in Hz
+            
+        Returns:
+            bool: True if frequency was set successfully
+        """
+        try:
+            # Check if M100 is enabled
+            if not self.app_controller:
+                return False
+                
+            m100_settings = self.app_controller.settings.get('m100', {})
+            if not m100_settings.get('enabled', False):
+                self._log_event(f"M100 not enabled, cannot set frequency to {frequency} Hz")
+                return False
+            
+            # Validate frequency range
+            if not (20.0 <= frequency <= 50.0):
+                self._log_event(f"Invalid frequency {frequency} Hz - must be between 20.0 and 50.0 Hz", level="error")
+                return False
+            
+            # Set frequency via hardware manager
+            if hasattr(self.hardware, 'set_m100_frequency'):
+                success = self.hardware.set_m100_frequency(frequency)
+                if success:
+                    self._log_event(f"M100 frequency set to {frequency:.1f} Hz successfully")
+                    return True
+                else:
+                    self._log_event(f"Failed to set M100 frequency to {frequency:.1f} Hz", level="error")
+                    return False
+            else:
+                self._log_event("Hardware manager does not support M100 frequency setting", level="warning")
+                return False
+                
+        except Exception as e:
+            self._log_event(f"Error setting M100 frequency: {str(e)}", level="error")
+            return False
+
     def start_test(self, reference_data: Dict[str, Any]) -> bool:
         """
-        Start the test sequence
+        Start the test sequence with automatic frequency support
         
         Args:
             reference_data: Test parameters from reference
@@ -149,67 +270,44 @@ class TestController:
         try:
             if not self.is_testing:
                 self._update_status("No test in progress", "warning")
-                return True
+                return False
             
-            self._log_event("Test stop requested", {"reason": reason})
-            self._change_state(TestState.STOPPING)
-            
-            # Signal stop to all threads
+            # Signal stop
             self.stop_event.set()
+            self._log_event(f"Test stop requested: {reason}")
             
-            # Stop hardware immediately
-            self._emergency_stop_hardware()
+            # Change state to stopping
+            self._change_state(TestState.STOPPING)
+            self._update_status(f"Stopping test: {reason}", "warning")
+            
+            # Stop hardware safely
+            self._stop_hardware_safely()
             
             # Wait for threads to finish
             if self.test_thread and self.test_thread.is_alive():
-                self.test_thread.join(timeout=5)
+                self.test_thread.join(timeout=5.0)
             
             if self.monitoring_thread and self.monitoring_thread.is_alive():
-                self.monitoring_thread.join(timeout=2)
+                self.monitoring_thread.join(timeout=2.0)
+            
+            # Finalize test results
+            self._finalize_test_results(status="STOPPED", reason=reason)
             
             # Return to home position
-            self._update_status("Returning to home position...", "info")
-            if self.motor.move_to_home():
-                self._update_status("Test stopped - System ready", "success")
-            else:
-                self._update_status("Test stopped - Home position failed", "warning")
+            self._return_to_home_safe()
             
-            # Save test results
-            self._finalize_test(completed=False, reason=reason)
-            
+            self._change_state(TestState.IDLE)
+            self._update_status("Test stopped successfully", "info")
             return True
             
         except Exception as e:
             self._handle_test_error(f"Error stopping test: {str(e)}")
             return False
-    
-    def emergency_stop(self, reason: str = "Emergency stop activated"):
-        """Handle emergency stop situation"""
-        try:
-            self._log_event("Emergency stop", {"reason": reason})
-            self._change_state(TestState.EMERGENCY_STOPPED)
-            
-            # Signal stop to all threads
-            self.stop_event.set()
-            
-            # Immediate hardware stop
-            self._emergency_stop_hardware()
-            
-            self._update_status(f"EMERGENCY STOP: {reason}", "error")
-            
-            # Save emergency stop event
-            self._finalize_test(completed=False, reason=f"Emergency: {reason}")
-            
-        except Exception as e:
-            print(f"Error in emergency stop: {e}")
-    
+
     def pause_test(self) -> bool:
-        """Pause the current test (if supported)"""
+        """Pause the current test"""
         try:
-            if self.test_state != TestState.TESTING:
-                return False
-            
-            # For this implementation, pause means stopping motor but staying in position
+            # Stop motor operation temporarily
             self.hardware.output_lines['relay_control_h300'].set_value(0)
             self._log_event("Test paused")
             self._update_status("Test paused", "warning")
@@ -245,6 +343,10 @@ class TestController:
         self.target_duration = self.test_parameters['inspection_time'] * 60  # Convert to seconds
         self.test_start_time = time.time()
         
+        # NEW: Reset frequency control parameters
+        self.calculated_frequency = None
+        self.frequency_set_successfully = False
+        
         # Reset data collections
         self.pressure_data = []
         self.test_log = []
@@ -254,9 +356,11 @@ class TestController:
         
         self._log_event("Test initialized", self.test_parameters)
         self._change_state(TestState.INITIALIZING)
-    
+
     def _run_test_sequence(self):
-        """Main test sequence execution"""
+        """
+        UPDATED: Main test sequence execution with automatic frequency setting support
+        """
         try:
             # Phase 1: Move to home position
             if self.stop_event.is_set():
@@ -278,276 +382,183 @@ class TestController:
             
             self._change_state(TestState.MOVING_TO_POSITION)
             target_position = self.test_parameters['position']
-            self._update_status(f"Moving to position {target_position}mm...", "info")
+            self._update_status(f"Moving to test position: {target_position} mm", "info")
             
-            if not self.motor.move_to_position(target_position, self._check_stop_condition):
-                raise RuntimeError("Failed to reach target position")
+            if not self.motor.move_to_position(target_position):
+                raise RuntimeError(f"Failed to reach target position: {target_position} mm")
             
-            self._log_event("Target position reached", {"position": target_position})
+            self._log_event(f"Target position reached: {target_position} mm")
             time.sleep(0.5)
             
-            # Phase 3: Start motor/pump
+            # Phase 3: NEW - Automatic Frequency Setting (if enabled)
+            if self.stop_event.is_set():
+                return
+            
+            if self.is_automatic_frequency_enabled():
+                self._change_state(TestState.SETTING_FREQUENCY)
+                self._update_status("Setting automatic frequency based on pressure...", "info")
+                
+                # Calculate frequency from target pressure
+                target_pressure = self.test_parameters['target_pressure']
+                self.calculated_frequency = self.calculate_frequency_from_calibration(target_pressure)
+                
+                self._log_event(f"Calculated frequency for {target_pressure} bar: {self.calculated_frequency:.1f} Hz")
+                self._update_status(f"Setting frequency to {self.calculated_frequency:.1f} Hz for {target_pressure} bar", "info")
+                
+                # Set the frequency on M100 device
+                self.frequency_set_successfully = self.set_m100_frequency(self.calculated_frequency)
+                
+                if not self.frequency_set_successfully:
+                    self._log_event("Failed to set automatic frequency, continuing with manual settings", level="warning")
+                    self._update_status("Frequency setting failed, using manual settings", "warning")
+                else:
+                    self._log_event(f"Automatic frequency set successfully: {self.calculated_frequency:.1f} Hz")
+                    self._update_status(f"Frequency set to {self.calculated_frequency:.1f} Hz", "success")
+                
+                time.sleep(1.0)  # Allow time for frequency setting to stabilize
+            else:
+                self._log_event("Automatic frequency disabled, using manual frequency settings")
+            
+            # Phase 4: Start motor/pump system
             if self.stop_event.is_set():
                 return
             
             self._change_state(TestState.STARTING_MOTOR)
-            self._update_status("Starting motor...", "info")
             
-            self.hardware.output_lines['relay_control_h300'].set_value(1)
-            self._log_event("Motor started")
-            time.sleep(1.0)  # Allow motor to start
+            if self.is_automatic_frequency_enabled() and self.frequency_set_successfully:
+                self._update_status(f"Starting motor with automatic frequency: {self.calculated_frequency:.1f} Hz", "info")
+            else:
+                self._update_status("Starting motor with manual frequency settings", "info")
             
-            # Phase 4: Begin test monitoring
+            # Start the motor/pump
+            if not self._start_motor():
+                raise RuntimeError("Failed to start motor")
+            
+            self._log_event("Motor started successfully")
+            time.sleep(1.0)
+            
+            # Phase 5: Testing phase
             if self.stop_event.is_set():
                 return
             
             self._change_state(TestState.TESTING)
-            self._update_status("Test in progress...", "info")
-            self._run_test_monitoring()
+            self._update_status(f"Testing in progress... Duration: {self.test_parameters['inspection_time']} min", "info")
             
-            # Phase 5: Complete test
+            # Run the main testing loop
+            self._run_testing_loop()
+            
+            # Phase 6: Stop motor and complete test
             if not self.stop_event.is_set():
-                self._complete_test_sequence()
+                self._change_state(TestState.STOPPING)
+                self._update_status("Test completed, stopping motor...", "info")
+                self._stop_motor()
+                
+                # Phase 7: Return to home position
+                self._change_state(TestState.RETURNING_HOME)
+                self._update_status("Returning to home position...", "info")
+                self._return_to_home()
+                
+                # Phase 8: Complete test
+                self._change_state(TestState.COMPLETED)
+                self._finalize_test_results(status="COMPLETED")
+                self._update_status("Test completed successfully", "success")
             
         except Exception as e:
-            self._handle_test_error(str(e))
+            self._handle_test_error(f"Test sequence error: {str(e)}")
+        finally:
+            # Ensure safe shutdown
+            self._ensure_safe_shutdown()
     
-    def _run_test_monitoring(self):
-        """Run the main test monitoring loop"""
-        test_start = time.time()
-        
-        while not self.stop_event.is_set():
-            try:
+    def _run_testing_loop(self):
+        """Run the main testing loop with data collection"""
+        try:
+            test_start = time.time()
+            
+            while not self.stop_event.is_set():
                 current_time = time.time()
                 elapsed = current_time - test_start
                 
                 # Check if test duration reached
                 if elapsed >= self.target_duration:
-                    self._log_event("Test duration completed")
+                    self._log_event(f"Test duration reached: {elapsed:.1f}s / {self.target_duration:.1f}s")
                     break
                 
-                # Check emergency conditions
-                if self._check_emergency_conditions():
-                    break
-                
-                # Small sleep to prevent CPU overload
-                time.sleep(0.01)
-                
-            except Exception as e:
-                print(f"Error in test monitoring: {e}")
-                break
-    
-    def _monitor_test_progress(self):
-        """Monitor test progress and collect data"""
-        while not self.stop_event.is_set() and self.is_testing:
-            try:
-                # Collect pressure data
-                pressure = self.hardware.read_pressure()
-                if pressure is not None:
-                    self.current_pressure = pressure
-                    self.max_pressure_reached = max(self.max_pressure_reached, pressure)
-                    if pressure < self.min_pressure_reached:
-                        self.min_pressure_reached = pressure
+                # Read current pressure
+                self.current_pressure = self.hardware.read_pressure()
+                if self.current_pressure is not None:
+                    # Update min/max tracking
+                    self.max_pressure_reached = max(self.max_pressure_reached, self.current_pressure)
+                    if self.min_pressure_reached == float('inf'):
+                        self.min_pressure_reached = self.current_pressure
+                    else:
+                        self.min_pressure_reached = min(self.min_pressure_reached, self.current_pressure)
                     
                     # Store data point
-                    if self.test_start_time is not None:
-                        timestamp = time.time() - self.test_start_time
-                        self.pressure_data.append({
-                            'timestamp': timestamp,
-                            'pressure': pressure
-                        })
-                
-                # Calculate test progress
-                if self.test_start_time:
-                    elapsed = time.time() - self.test_start_time
-                    self.test_duration = elapsed / 60  # Convert to minutes
-                
-                # Update UI via callback
-                if self.data_callback:
-                    self.data_callback({
+                    self.pressure_data.append({
+                        'timestamp': current_time,
                         'pressure': self.current_pressure,
-                        'duration': self.test_duration,
-                        'target_duration': self.target_duration / 60,
-                        'state': self.test_state.value
+                        'elapsed': elapsed
                     })
+                    
+                    # Call data callback
+                    if self.data_callback:
+                        self.data_callback(self.current_pressure, elapsed)
                 
+                # Sleep for data collection interval
                 time.sleep(self.data_collection_interval)
                 
-            except Exception as e:
-                print(f"Error in progress monitoring: {e}")
-                time.sleep(1)
-    
-    def _complete_test_sequence(self):
-        """Complete the test successfully"""
-        try:
-            # Stop motor
-            self.hardware.output_lines['relay_control_h300'].set_value(0)
-            self._log_event("Motor stopped")
-            time.sleep(0.5)
-            
-            # Return to home
-            self._change_state(TestState.RETURNING_HOME)
-            self._update_status("Returning to home position...", "info")
-            
-            if self.motor.move_to_home():
-                self._update_status("Test completed successfully", "success")
-                self._log_event("Returned to home position")
-            else:
-                self._update_status("Test completed - Home position failed", "warning")
-                self._log_event("Failed to return to home position")
-            
-            # Finalize test
-            self._finalize_test(completed=True, reason="Normal completion")
-            
         except Exception as e:
-            self._handle_test_error(f"Error completing test: {str(e)}")
-    
-    def _finalize_test(self, completed: bool, reason: str):
-        """Finalize test and save results"""
+            self._log_event(f"Error in testing loop: {str(e)}", level="error")
+            raise
+
+    def _monitor_test_progress(self):
+        """Monitor test progress and update status"""
         try:
-            end_time = time.time()
-            
-            # Calculate statistics
-            pressure_stats = self._calculate_pressure_statistics()
-            
-            # Create test results
-            self.test_results = {
-                'test_id': self.test_id,
-                'timestamp': datetime.now().isoformat(),
-                'completed': completed,
-                'reason': reason,
-                'duration_seconds': end_time - self.test_start_time if self.test_start_time else 0,
-                'duration_minutes': self.test_duration,
-                'parameters': self.test_parameters.copy(),
-                'pressure_stats': pressure_stats,
-                'data_points': len(self.pressure_data),
-                'test_log': self.test_log.copy()
-            }
-            
-            # Save results
-            self._save_test_results()
-            
-            # Update state
-            self._change_state(TestState.COMPLETED if completed else TestState.ERROR)
-            
-            self._log_event("Test finalized", {
-                'completed': completed,
-                'reason': reason,
-                'duration': self.test_duration
-            })
-            
+            while not self.stop_event.is_set() and self.is_testing:
+                if self.test_start_time:
+                    elapsed = time.time() - self.test_start_time
+                    remaining = max(0, self.target_duration - elapsed)
+                    
+                    progress = min(100, (elapsed / self.target_duration) * 100)
+                    
+                    status_msg = f"Testing... {progress:.1f}% complete ({remaining:.0f}s remaining)"
+                    
+                    if self.is_automatic_frequency_enabled() and self.calculated_frequency:
+                        status_msg += f" | Freq: {self.calculated_frequency:.1f}Hz"
+                    
+                    self._update_status(status_msg, "info")
+                
+                time.sleep(self.status_update_interval)
+                
         except Exception as e:
-            print(f"Error finalizing test: {e}")
-    
-    def _calculate_pressure_statistics(self) -> Dict[str, float]:
-        """Calculate pressure statistics"""
+            print(f"Error in test monitoring: {e}")
+
+    def _validate_reference_data(self, reference_data: Dict[str, Any]) -> bool:
+        """Validate reference data parameters"""
         try:
-            if not self.pressure_data:
-                return {}
-            
-            pressures = [dp['pressure'] for dp in self.pressure_data]
-            
-            return {
-                'min_pressure': min(pressures),
-                'max_pressure': max(pressures),
-                'avg_pressure': sum(pressures) / len(pressures),
-                'final_pressure': pressures[-1] if pressures else 0,
-                'pressure_range': max(pressures) - min(pressures),
-                'data_points': len(pressures)
-            }
-            
-        except Exception as e:
-            print(f"Error calculating pressure statistics: {e}")
-            return {}
-    
-    def _save_test_results(self):
-        """Save test results to file"""
-        try:
-            # Create filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"test_results_{timestamp}_{self.test_id}.json"
-            
-            # Save to file
-            with open(filename, 'w') as f:
-                json.dump(self.test_results, f, indent=4)
-            
-            print(f"Test results saved: {filename}")
-            
-        except Exception as e:
-            print(f"Error saving test results: {e}")
-    
-    def _emergency_stop_hardware(self):
-        """Immediately stop all hardware"""
-        try:
-            # Stop motor/pump
-            if hasattr(self.hardware, 'output_lines'):
-                self.hardware.output_lines['relay_control_h300'].set_value(0)
-                # Disable stepper motor
-                self.hardware.output_lines['stepper_enable'].set_value(1)
-                # Set all other outputs to safe state
-                for name, line in self.hardware.output_lines.items():
-                    if name not in ['stepper_enable']:
-                        line.set_value(0)
-            
-        except Exception as e:
-            print(f"Error in emergency hardware stop: {e}")
-    
-    def _check_stop_condition(self) -> bool:
-        """Check if test should be stopped"""
-        return self.stop_event.is_set() or self._check_emergency_conditions()
-    
-    def _check_emergency_conditions(self) -> bool:
-        """Check for emergency conditions"""
-        try:
-            # Check emergency button
-            if hasattr(self.hardware, 'input_lines'):
-                if self.hardware.input_lines['emergency_btn'].get_value():
-                    self.emergency_stop("Emergency button pressed")
-                    return True
-            
-            # Check safety manager
-            if self.safety.emergency_active:
-                return True
-            
-        except Exception as e:
-            print(f"Error checking emergency conditions: {e}")
-        
-        return False
-    
-    def _check_home_position(self) -> bool:
-        """Check if actuator is at home position"""
-        try:
-            if hasattr(self.hardware, 'input_lines'):
-                return self.hardware.input_lines['actuator_min'].get_value()
-        except:
-            pass
-        return False
-    
-    def _validate_reference_data(self, reference_data: Dict) -> bool:
-        """Validate reference data structure"""
-        try:
-            if not isinstance(reference_data, dict):
-                return False
-            
             params = reference_data.get('parameters', {})
-            if not isinstance(params, dict):
-                return False
             
-            required_keys = ['position', 'target_pressure', 'inspection_time']
-            
-            for key in required_keys:
-                if key not in params:
-                    return False
-                value = params[key]
-                if not isinstance(value, (int, float)) or value <= 0:
+            # Check required parameters
+            required_params = ['position', 'target_pressure', 'inspection_time']
+            for param in required_params:
+                if param not in params:
+                    print(f"Missing required parameter: {param}")
                     return False
             
-            # Validate ranges
-            if not (65 < params['position'] <= 200):
+            # Validate parameter ranges
+            position = params['position']
+            if not (65 <= position <= 200):
+                print(f"Position {position} mm out of range (65-200 mm)")
                 return False
-            if not (0 < params['target_pressure'] <= 4.5):
+            
+            pressure = params['target_pressure']
+            if not (0 <= pressure <= 4.5):
+                print(f"Pressure {pressure} bar out of range (0-4.5 bar)")
                 return False
-            if not (0 < params['inspection_time'] <= 120):
+            
+            time_minutes = params['inspection_time']
+            if not (0 <= time_minutes <= 120):
+                print(f"Time {time_minutes} min out of range (0-120 min)")
                 return False
             
             return True
@@ -555,180 +566,172 @@ class TestController:
         except Exception as e:
             print(f"Error validating reference data: {e}")
             return False
-    
+
+    def _check_home_position(self) -> bool:
+        """Check if system is at home position"""
+        try:
+            if hasattr(self.motor, 'is_at_home'):
+                return self.motor.is_at_home()
+            return False
+        except Exception as e:
+            print(f"Error checking home position: {e}")
+            return False
+
+    def _start_motor(self) -> bool:
+        """Start the motor/pump system"""
+        try:
+            # Start motor via relay control
+            if 'relay_control_h300' in self.hardware.output_lines:
+                self.hardware.output_lines['relay_control_h300'].set_value(1)
+                return True
+            return False
+        except Exception as e:
+            print(f"Error starting motor: {e}")
+            return False
+
+    def _stop_motor(self):
+        """Stop the motor/pump system"""
+        try:
+            if 'relay_control_h300' in self.hardware.output_lines:
+                self.hardware.output_lines['relay_control_h300'].set_value(0)
+        except Exception as e:
+            print(f"Error stopping motor: {e}")
+
+    def _return_to_home(self):
+        """Return system to home position"""
+        try:
+            self.motor.move_to_home()
+        except Exception as e:
+            print(f"Error returning to home: {e}")
+
+    def _return_to_home_safe(self):
+        """Safely return to home position"""
+        try:
+            self._stop_motor()
+            time.sleep(1.0)
+            self._return_to_home()
+        except Exception as e:
+            print(f"Error in safe return to home: {e}")
+
+    def _stop_hardware_safely(self):
+        """Stop all hardware safely"""
+        try:
+            self._stop_motor()
+            # Add any other hardware safety stops here
+        except Exception as e:
+            print(f"Error stopping hardware safely: {e}")
+
+    def _ensure_safe_shutdown(self):
+        """Ensure all systems are safely shut down"""
+        try:
+            self._stop_hardware_safely()
+            self._return_to_home_safe()
+            if self.test_state not in [TestState.COMPLETED, TestState.ERROR]:
+                self._change_state(TestState.IDLE)
+        except Exception as e:
+            print(f"Error in safe shutdown: {e}")
+
+    def _finalize_test_results(self, status: str, reason: str = ""):
+        """Finalize and save test results"""
+        try:
+            end_time = time.time()
+            actual_duration = end_time - self.test_start_time if self.test_start_time else 0
+            
+            self.test_results = {
+                'test_id': self.test_id,
+                'status': status,
+                'reason': reason,
+                'parameters': self.test_parameters.copy(),
+                'results': {
+                    'start_time': self.test_start_time,
+                    'end_time': end_time,
+                    'actual_duration': actual_duration,
+                    'target_duration': self.target_duration,
+                    'max_pressure': self.max_pressure_reached,
+                    'min_pressure': self.min_pressure_reached,
+                    'final_pressure': self.current_pressure,
+                    'data_points': len(self.pressure_data)
+                },
+                'frequency_control': {  # NEW: Frequency control information
+                    'automatic_enabled': self.is_automatic_frequency_enabled(),
+                    'calculated_frequency': self.calculated_frequency,
+                    'frequency_set_successfully': self.frequency_set_successfully
+                },
+                'pressure_data': self.pressure_data,
+                'test_log': self.test_log
+            }
+            
+            # Save results to file
+            self._save_test_results()
+            
+        except Exception as e:
+            print(f"Error finalizing test results: {e}")
+
+    def _save_test_results(self):
+        """Save test results to file"""
+        try:
+            filename = f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(filename, 'w') as f:
+                json.dump(self.test_results, f, indent=2, default=str)
+            print(f"Test results saved to: {filename}")
+        except Exception as e:
+            print(f"Error saving test results: {e}")
+
     def _change_state(self, new_state: TestState):
         """Change test state and log the change"""
         old_state = self.test_state
         self.test_state = new_state
-        self._log_event("State change", {
-            'from': old_state.value,
-            'to': new_state.value
-        })
-    
-    def _log_event(self, event: str, data: Optional[Dict] = None):
+        self._log_event(f"State changed: {old_state.value} → {new_state.value}")
+
+    def _log_event(self, message: str, data: Any = None, level: str = "info"):
         """Log an event with timestamp"""
-        try:
-            log_entry = {
-                'timestamp': time.time(),
-                'event': event,
-                'test_time': time.time() - self.test_start_time if self.test_start_time else 0,
-                'data': data or {}
-            }
-            self.test_log.append(log_entry)
-            
-            # Print for debugging
-            print(f"[TEST LOG] {event}: {data or ''}")
-            
-        except Exception as e:
-            print(f"Error logging event: {e}")
-    
-    def _handle_test_error(self, error_message: str):
-        """Handle test errors"""
-        self._log_event("Test error", {'error': error_message})
-        print(f"Test error: {error_message}")
-        
-        # Stop hardware safely
-        self._emergency_stop_hardware()
-        
-        # Update status
-        self._update_status(f"Test failed: {error_message}", "error")
-        
-        # Save error results
-        self._finalize_test(completed=False, reason=f"Error: {error_message}")
-        
-        # Signal stop
-        self.stop_event.set()
-    
+        timestamp = datetime.now().isoformat()
+        log_entry = {
+            'timestamp': timestamp,
+            'level': level,
+            'message': message,
+            'data': data
+        }
+        self.test_log.append(log_entry)
+        print(f"[{timestamp}] [{level.upper()}] {message}")
+
     def _update_status(self, message: str, level: str = "info"):
         """Update status via callback"""
         if self.status_callback:
-            try:
-                self.status_callback(message, level)
-            except Exception as e:
-                print(f"Error in status callback: {e}")
-        
-        print(f"[{level.upper()}] {message}")
-    
+            self.status_callback(message, level)
+        else:
+            print(f"Status: {message}")
+
+    def _handle_test_error(self, error_message: str):
+        """Handle test errors safely"""
+        try:
+            self._log_event(error_message, level="error")
+            self._change_state(TestState.ERROR)
+            self._update_status(f"Test error: {error_message}", "error")
+            self._ensure_safe_shutdown()
+        except Exception as e:
+            print(f"Error in error handler: {e}")
+
+    # Public methods for getting test information
     def get_test_status(self) -> Dict[str, Any]:
-        """Get comprehensive test status"""
+        """Get current test status information"""
         return {
-            'test_id': self.test_id,
             'state': self.test_state.value,
             'is_testing': self.is_testing,
-            'can_start': self.can_start_test,
+            'test_id': self.test_id,
+            'parameters': self.test_parameters,
             'current_pressure': self.current_pressure,
-            'test_duration': self.test_duration,
-            'target_duration': self.target_duration / 60 if self.target_duration else 0,
-            'parameters': self.test_parameters.copy(),
-            'pressure_stats': {
-                'current': self.current_pressure,
-                'max': self.max_pressure_reached,
-                'min': self.min_pressure_reached if self.min_pressure_reached != float('inf') else 0
-            },
-            'data_points_collected': len(self.pressure_data),
-            'test_log_entries': len(self.test_log)
+            'elapsed_time': time.time() - self.test_start_time if self.test_start_time else 0,
+            'target_duration': self.target_duration,
+            'automatic_frequency_enabled': self.is_automatic_frequency_enabled(),
+            'calculated_frequency': self.calculated_frequency,
+            'frequency_set_successfully': self.frequency_set_successfully
         }
-    
-    def get_pressure_data(self) -> List[Dict]:
-        """Get collected pressure data"""
-        return self.pressure_data.copy()
-    
-    def get_test_log(self) -> List[Dict]:
-        """Get test event log"""
-        return self.test_log.copy()
-    
+
     def get_test_results(self) -> Dict[str, Any]:
         """Get final test results"""
-        return self.test_results.copy()
-    
-    def export_test_data(self, filepath: str) -> bool:
-        """Export test data to file"""
-        try:
-            export_data = {
-                'test_results': self.test_results,
-                'pressure_data': self.pressure_data,
-                'test_log': self.test_log,
-                'export_timestamp': datetime.now().isoformat()
-            }
-            
-            with open(filepath, 'w') as f:
-                json.dump(export_data, f, indent=4)
-            
-            print(f"Test data exported to: {filepath}")
-            return True
-            
-        except Exception as e:
-            print(f"Error exporting test data: {e}")
-            return False
-    
-    def reset_controller(self):
-        """Reset controller to initial state"""
-        try:
-            # Stop any running test
-            if self.is_testing:
-                self.stop_test("Controller reset")
-            
-            # Wait for threads to finish
-            if self.test_thread and self.test_thread.is_alive():
-                self.test_thread.join(timeout=5)
-            if self.monitoring_thread and self.monitoring_thread.is_alive():
-                self.monitoring_thread.join(timeout=2)
-            
-            # Reset state
-            self.test_state = TestState.IDLE
-            self.stop_event.clear()
-            
-            # Clear data
-            self.test_parameters = {}
-            self.pressure_data = []
-            self.test_log = []
-            self.test_results = {}
-            self.test_id = None
-            self.test_start_time = None
-            self.test_duration = 0.0
-            self.current_pressure = 0.0
-            self.max_pressure_reached = 0.0
-            self.min_pressure_reached = float('inf')
-            
-            print("Test controller reset")
-            return True
-            
-        except Exception as e:
-            print(f"Error resetting controller: {e}")
-            return False
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get test statistics"""
-        try:
-            if not self.test_start_time:
-                return {}
-            
-            elapsed = time.time() - self.test_start_time
-            progress = min(100, (elapsed / self.target_duration * 100)) if self.target_duration > 0 else 0
-            
-            return {
-                'elapsed_time': elapsed,
-                'progress_percent': progress,
-                'pressure_readings': len(self.pressure_data),
-                'average_pressure': sum(dp['pressure'] for dp in self.pressure_data) / len(self.pressure_data) if self.pressure_data else 0,
-                'data_collection_rate': len(self.pressure_data) / elapsed if elapsed > 0 else 0,
-                'estimated_completion': self.test_start_time + self.target_duration if self.target_duration > 0 else None
-            }
-            
-        except Exception as e:
-            print(f"Error calculating statistics: {e}")
-            return {}
-    
-    def set_data_collection_interval(self, interval: float):
-        """Set data collection interval"""
-        if 0.01 <= interval <= 10.0:  # Between 10ms and 10s
-            self.data_collection_interval = interval
-            return True
-        return False
-    
-    def set_status_update_interval(self, interval: float):
-        """Set status update interval"""
-        if 0.1 <= interval <= 60.0:  # Between 100ms and 60s
-            self.status_update_interval = interval
-            return True
-        return False
+        return self.test_results.copy() if self.test_results else {}
+
+    def get_pressure_data(self) -> List[Dict[str, Any]]:
+        """Get collected pressure data"""
+        return self.pressure_data.copy()

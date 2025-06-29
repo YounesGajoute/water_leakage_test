@@ -4,7 +4,9 @@ Properly clears existing content before showing login interface
 """
 
 import tkinter as tk
+import hashlib
 from ..components.keyboard import VirtualKeyboard
+from .password_change_dialog import show_password_change_dialog
 
 
 class LoginInterface:
@@ -17,7 +19,6 @@ class LoginInterface:
         self.colors = main_window.colors
         
         self.password = ""
-        self.correct_password = "Admin123"
         
         # Store the previous view for restoration if cancelled
         self.previous_view = getattr(main_window, 'current_view', 'Main')
@@ -142,14 +143,6 @@ class LoginInterface:
                            fg=self.colors['text_primary'])
         pwd_label.pack(pady=(15, 5))
         
-        # Password hint (optional - remove if security is a concern)
-        hint_label = tk.Label(password_frame,
-                             text="Hint: Admin123 (case-insensitive)",
-                             font=('Arial', 10),
-                             bg=self.colors['white'],
-                             fg=self.colors['text_secondary'])
-        hint_label.pack(pady=(0, 5))
-        
         # Password entry with better styling
         self.password_var = tk.StringVar()
         self.password_entry = tk.Entry(password_frame,
@@ -247,6 +240,20 @@ class LoginInterface:
                             command=self.clear_password)
         clear_btn.pack(side='left', padx=10)
         
+        # Change Password button
+        change_pwd_btn = tk.Button(button_container,
+                                 text="🔒 Change Password",
+                                 width=18,
+                                 height=2,
+                                 font=('Arial', 12, 'bold'),
+                                 bg=self.colors['warning'],
+                                 fg=self.colors['white'],
+                                 activebackground='#d97706',
+                                 activeforeground=self.colors['white'],
+                                 relief='flat',
+                                 command=self.change_password)
+        change_pwd_btn.pack(side='left', padx=10)
+        
         # Cancel button with enhanced styling
         cancel_btn = tk.Button(button_container,
                              text="❌ Cancel (ESC)",
@@ -282,15 +289,46 @@ class LoginInterface:
         self.error_label.config(text="")
         self.password_entry.focus_set()
 
+    def change_password(self):
+        """Open password change dialog"""
+        try:
+            # Show the password change dialog
+            result = show_password_change_dialog(self.main_window.root, self.main_window.app_controller, self.colors)
+            
+            if result:
+                self.error_label.config(text="Password changed successfully! Please login with new password.", fg=self.colors['success'])
+                self.password_var.set('')
+                self.password_entry.focus_set()
+            else:
+                # Password change was cancelled, just clear any error
+                self.error_label.config(text="")
+                
+        except Exception as e:
+            print(f"Error opening password change dialog: {e}")
+            self.error_label.config(text=f"Error: {str(e)}", fg=self.colors['error'])
+
     def verify_password(self):
-        """Verify entered password with enhanced feedback and case-insensitive comparison"""
+        """Verify entered password against stored hash"""
         entered_password = self.password_var.get().strip()
         
         print(f"Password verification attempt for {self.target_page}")
         print(f"Entered: '{entered_password}' (length: {len(entered_password)})")
         
-        # Make comparison case-insensitive for better UX
-        if entered_password.lower() == self.correct_password.lower():
+        # Get stored password hash from app controller
+        stored_hash = self.main_window.app_controller.settings.get("password_hash", "")
+        
+        # If no password is set, use default "Admin123"
+        if not stored_hash:
+            default_password = "Admin123"
+            stored_hash = hashlib.sha256(default_password.encode()).hexdigest()
+            # Save the default password hash
+            self.main_window.app_controller.settings["password_hash"] = stored_hash
+            self.main_window.app_controller.save_settings()
+        
+        # Hash the entered password
+        entered_hash = hashlib.sha256(entered_password.encode()).hexdigest()
+        
+        if entered_hash == stored_hash:
             print("Password verified successfully")
             self.success_login()
         else:
@@ -299,8 +337,6 @@ class LoginInterface:
             # Provide helpful feedback
             if len(entered_password) == 0:
                 error_msg = "Please enter a password"
-            elif len(entered_password) < len(self.correct_password):
-                error_msg = f"Password too short (need {len(self.correct_password)} characters)"
             else:
                 error_msg = "Incorrect password. Please try again."
             
@@ -381,19 +417,12 @@ class LoginInterface:
     def update_char_count(self, *args):
         """Update character count display"""
         count = len(self.password_var.get())
-        expected = len(self.correct_password)
         
         if count == 0:
             text = "Enter password"
             color = self.colors['text_secondary']
-        elif count < expected:
-            text = f"{count}/{expected} characters"
-            color = self.colors['text_secondary']
-        elif count == expected:
-            text = f"{count}/{expected} characters ✓"
-            color = self.colors.get('success', '#10b981')
         else:
-            text = f"{count} characters (checking...)"
+            text = f"{count} characters"
             color = self.colors['text_secondary']
         
         if hasattr(self, 'char_count_label'):

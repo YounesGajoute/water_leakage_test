@@ -702,6 +702,7 @@ class MainWindow:
             self.update_navigation_state("Settings")
             
             if SettingsView is not None:
+                # Pass content_container as parent for proper embedding
                 self.settings_view = SettingsView(self.content_container, self.app_controller, self.colors)
                 self.settings_view.show()
             else:
